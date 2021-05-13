@@ -1,5 +1,6 @@
 import seaborn as sns
 import plotly.express as px
+import plotly.graph_objects as go
 import cvxpy as cp
 import numpy as np
 import math
@@ -19,7 +20,6 @@ def get_mae(theta, X, y):
 
 
 def load_vaccination_data(plot=False):
-
     dfvac = pd.read_csv("Data/country_vaccinations.csv")
     dfvac = dfvac.drop_duplicates('country', keep='last')  # keep unique record by country
 
@@ -74,7 +74,7 @@ def load_gdp_data(plot=False):
     return df_gdp
 
 
-def merge_scatter_dfs(df_vacc, df_gdp, plot=False):
+def merge_dfs(df_vacc, df_gdp, plot=False):
     df = pd.merge(df_vacc, df_gdp, how='outer', left_on='iso_code', right_on='Country Code')
 
     # Cleaning
@@ -95,20 +95,52 @@ def merge_scatter_dfs(df_vacc, df_gdp, plot=False):
     return df
 
 
-def load_dataset():
-    diabetes = load_diabetes()
-    X, X_test, Y, Y_test = train_test_split(diabetes['data'],
-                                            np.expand_dims(diabetes['target'], 1),
-                                            test_size=0.25, random_state=0)
-    X = np.concatenate((X, np.ones((X.shape[0], 1))), axis=1)  # Bias column:
-    X_test = np.concatenate((X_test, np.ones((X_test.shape[0], 1))), axis=1)
+def split_data(df):
+    train_validation_ratio = 0.8
+    train_size = math.floor(df.shape[0] * train_validation_ratio)
 
-    return X, X_test, Y, Y_test
+    df_train = df.loc[0:train_size]
+    df_validate = df.loc[train_size + 1:]
+
+    X = np.array(df_train['GDP per capita (2018)'])
+    Y = np.array(df_train['% Vaccinated'])
+    X_test = np.array(df_validate['GDP per capita (2018)'])
+    Y_test = np.array(df_validate['% Vaccinated'])
+
+    X = np.expand_dims(X, 1)
+    Y = np.expand_dims(Y, 1)
+    X_test = np.expand_dims(X_test, 1)
+    Y_test = np.expand_dims(Y_test, 1)
+
+    return X, Y, X_test, Y_test
+
+
+def cross_validation(X, Y, X_test, Y_test, verbose=False):
+    train, validation, thetas, optimal = [], [], [], []
+
+    for l in LAMBDA:
+        optimal_theta, optimal_value, dual_value = lp_solver(X, Y, l, math.floor(0.75 * X.shape[0]))
+        thetas.append(optimal_theta)
+        optimal.append(optimal_value)
+        train.append(get_mae(optimal_theta, X, Y))
+        validation.append(get_mae(optimal_theta, X_test, Y_test))
+
+    best_lambda = LAMBDA[np.argmin(validation)]
+    best_theta = thetas[np.argmin(validation)]
+    best_value = optimal[np.argmin(validation)]
+
+    if verbose:
+        print('---Optimal values--')
+        print(f'Lambda: {best_lambda}')
+        print(f'Optimal value: {best_value}')
+        print(f'Theta:\n {best_theta}')
+
+    return best_theta
 
 
 # LP solver:
 def lp_solver(X, Y, lambda_, k):
-    d = 1 # X.shape[1]
+    d = X.shape[1]
     N = X.shape[0]
     beta = cp.Variable((N, 1))
     b = cp.Variable((d, 1))
@@ -117,8 +149,8 @@ def lp_solver(X, Y, lambda_, k):
 
     objective = cp.Minimize(k * alpha + cp.sum(beta) + lambda_ * cp.sum(b))
     constraints = [
-        alpha + beta >= 1 / k * (Y - X @ theta.T),
-        alpha + beta >= -1 / k * (Y - X @ theta.T),
+        alpha + beta >= 1 / k * (Y - X @ theta),
+        alpha + beta >= -1 / k * (Y - X @ theta),
         beta >= 0,
         -b <= theta,
         theta <= b
@@ -134,39 +166,25 @@ def lp_solver(X, Y, lambda_, k):
 
 
 def main():
+    # Preparing data to look at: GDP per capita, % Vaccinated
     df_vacc = load_vaccination_data()
     df_gdp = load_gdp_data()
+    df = merge_dfs(df_vacc, df_gdp)
 
-    df = merge_scatter_dfs(df_vacc, df_gdp)
+    # Splitting into training and validation arrays
+    X, Y, X_test, Y_test = split_data(df)
 
-    TRAIN_VALIDATION_RATIO = 0.8
-    train_size = math.floor(df.shape[0] * TRAIN_VALIDATION_RATIO)
+    # Finding optimal
+    theta = cross_validation(X, Y, X_test, Y_test)
 
-    df_train = df.loc[0:train_size]
-    df_validate = df.loc[train_size+1:]
+    # Plotting with trend line
+    N = 140000
+    x = np.linspace(0, N, N)
 
-    X = df_train['GDP per capita (2018)']
-    Y = df_train['% Vaccinated']
-    X_test = df_validate['GDP per capita (2018)']
-    Y_test = df_validate['% Vaccinated']
-
-    # Cross-validation:
-    train, validation, thetas, optimal = [], [], [], []
-    for l in LAMBDA:
-        optimal_theta, optimal_value, dual_value = lp_solver(X, Y, l, math.floor(0.75 * X.shape[0]))
-        thetas.append(optimal_theta)
-        optimal.append(optimal_value)
-        train.append(get_mae(optimal_theta, X, Y))
-        validation.append(get_mae(optimal_theta, X_test, Y_test))
-
-    best_lambda = LAMBDA[np.argmin(validation)]
-    best_theta = thetas[np.argmin(validation)]
-    best_value = optimal[np.argmin(validation)]
-
-    print('---Optimal values--')
-    print(f'Lambda: {best_lambda}')
-    print(f'Optimal value: {best_value}')
-    print(f'Theta:\n {best_theta}')
+    y = x * theta[0]
+    fig = px.scatter(df, x='GDP per capita (2018)', y='% Vaccinated', color='Country')
+    fig.add_trace(go.Scatter(x=x, y=y, mode='lines', name='lines', marker_color='rgb(0,0,0)'))  # trendline
+    fig.show()
 
 
 main()
