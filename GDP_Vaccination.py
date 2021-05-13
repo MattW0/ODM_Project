@@ -180,8 +180,8 @@ def main():
     # Plotting with trend line
     N = 140000
     x = np.linspace(0, N, N)
-
     y = x * theta[0]
+
     fig = px.scatter(df, x='GDP per capita (2018)', y='% Vaccinated', color='Country')
     fig.add_trace(go.Scatter(x=x, y=y, mode='lines', name='lines', marker_color='rgb(0,0,0)'))  # trendline
     fig.show()
